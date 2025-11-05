@@ -64,21 +64,58 @@ static int setup_cgroups(struct container_config *config, pid_t pid) {
     char content[256];
     
     /* Create cgroup directory */
-    // ???
-    
+    snprintf(path, sizeof(path), "%s/%s", CGROUP_ROOT, config->cgroup_name);
+    if (mkdir(path, 0755) == -1 && errno != EEXIST) {
+        perror("mkdir cgroup");
+        return -1;
+    }
+
     printf("[CGROUP] Created cgroup: %s\n", config->cgroup_name);
     
     /* Set memory limit */
-    // ???
+    if (config->memory_limit > 0) {
+        snprintf(path, sizeof(path), "%s/%s/memory.max", 
+                 CGROUP_ROOT, config->cgroup_name);
+        snprintf(content, sizeof(content), "%ld", config->memory_limit);
+        
+        if (write_file(path, content) == 0) {
+            printf("[CGROUP] Memory limit: %ld bytes (%.1f MB)\n", 
+                   config->memory_limit, config->memory_limit / 1024.0 / 1024.0);
+        }
+    }
     
     /* Set CPU weight (cgroup v2 equivalent of shares) */
-    // ???  
+    if (config->cpu_shares > 0) {
+        snprintf(path, sizeof(path), "%s/%s/cpu.weight", 
+                 CGROUP_ROOT, config->cgroup_name);
+        snprintf(content, sizeof(content), "%ld", config->cpu_shares);
+        
+        if (write_file(path, content) == 0) {
+            printf("[CGROUP] CPU weight: %ld\n", config->cpu_shares);
+        }
+    }
     
     /* Set PID limit */
-    // ???
-    
+    if (config->pids_max > 0) {
+        snprintf(path, sizeof(path), "%s/%s/pids.max", 
+                 CGROUP_ROOT, config->cgroup_name);
+        snprintf(content, sizeof(content), "%d", config->pids_max);
+        
+        if (write_file(path, content) == 0) {
+            printf("[CGROUP] PID limit: %d\n", config->pids_max);
+        }
+    } 
+
     /* Add process to cgroup */
-    // ???
+    snprintf(path, sizeof(path), "%s/%s/cgroup.procs", 
+             CGROUP_ROOT, config->cgroup_name);
+    snprintf(content, sizeof(content), "%d", pid);
+    
+    if (write_file(path, content) == -1) {
+        fprintf(stderr, "[CGROUP] Failed to add process to cgroup\n");
+        return -1;
+    }
+
     
     printf("[CGROUP] Added PID %d to cgroup\n", pid);
     return 0;
@@ -135,7 +172,12 @@ static int child_func(void *arg) {
     /* Pivot root */
     printf("[CONTAINER] Pivoting root...\n");
 
-    // ???
+    printf("[CONTAINER] Pivoting root...\n");
+    if (syscall(SYS_pivot_root, ".", ".old_root") == -1) {
+        perror("pivot_root");
+        fprintf(stderr, "[CONTAINER] Debug: errno=%d\n", errno);
+        return 1;
+    }
 
     printf("[CONTAINER] Root filesystem pivoted successfully\n");
     
@@ -234,16 +276,24 @@ static int run_container(struct container_config *config) {
     
     /* Namespace flags */
 
-    int flags = // ??? 
+    int flags = CLONE_NEWPID |   /* New PID namespace */
+                CLONE_NEWNS |    /* New mount namespace */
+                CLONE_NEWUTS |   /* New hostname namespace */
+                CLONE_NEWIPC |   /* New IPC namespace */
+                CLONE_NEWNET |   /* New network namespace */
+                SIGCHLD;
     
     printf("[HOST] Creating container with namespaces...\n");
     printf("[HOST] Rootfs: %s\n", config->rootfs);
     printf("[HOST] Command: %s\n", config->command);
     
     /* Clone process with new namespaces */
-    pid_t pid = // ??? 
-
-
+    pid_t pid = clone(child_func, stack_top, flags, config);
+    if (pid == -1) {
+        perror("clone");
+        free(stack);
+        return 1;
+    }
 
     if (pid == -1) {
         perror("clone");
@@ -319,9 +369,10 @@ int main(int argc, char *argv[]) {
     if ((env = getenv("CPU_SHARES"))) {
         config.cpu_shares = atol(env);
     }
-    if ((env = getenv("PIDS_MAX"))) {
+    /*if ((env = getenv("PIDS_MAX"))) {
         config.pids_max = atoi(env);
-    }
+    }*/ 
+    config.pids_max = 10;
     
     /* Verify rootfs exists */
     struct stat st;
